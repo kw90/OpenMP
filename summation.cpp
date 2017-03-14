@@ -1,6 +1,8 @@
 #include <iostream>
 #include <omp.h>
 #include "Stopwatch.h"
+#include <mutex>
+
 using namespace std;
 
 //////////////////////////////////////////////////////////////////////////////////////////////
@@ -15,6 +17,67 @@ long long sumSerial(const int n) {
 	long long sum = 0;
 	for (int i=1; i <= n; i++) {
 		sum += i;
+	}
+	return sum;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+// Parallel summation with critical section
+static long long sumPar1(const int n) {
+	long long sum = 0;
+	#pragma omp parallel for default(none) shared(sum)
+	for (int i = 0; i <= n; i++)
+	{
+		#pragma omp critical
+		sum += i;
+	}
+	return sum;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+// Parallel summation with atomic access
+static long long sumPar2(const int n) {
+	long long sum = 0;
+	#pragma omp parallel for default(none) shared(sum)
+	for (int i = 0; i <= n; i++)
+	{
+		#pragma omp atomic
+		sum += i;
+	}
+
+	return sum;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+// Parallel summation with reduction
+static long long sumPar3(const int n) {
+	long long sum = 0;
+	#pragma omp parallel for default(none) shared(sum) reduction(+:sum)
+	for (int i = 0; i <= n; i++)
+	{
+		sum += i;
+	}
+	return sum;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+// Parallel summation with explicit locks
+static long long sumPar4(const int n) {
+	long long sum = 0;
+	bool m_writeLocked = false;
+	mutex m_mutex;
+	condition_variable m_writingAllowed;
+
+	#pragma omp parallel for default(none) shared(sum, m_writeLocked, m_mutex, m_writingAllowed)
+	for (int i = 0; i <= n; i++)
+	{
+		unique_lock<mutex> monitor(m_mutex);
+		while (m_writeLocked) {
+			m_writingAllowed.wait(monitor);
+		}
+		m_writeLocked = true;
+		sum += i;
+		m_writeLocked = false;
 	}
 	return sum;
 }
