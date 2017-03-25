@@ -23,6 +23,20 @@ typedef struct tagRGBQUAD {
 */
 #endif
 
+const int bypp = 4;
+const int fSize = 3;
+const int fSize2 = fSize / 2;
+const int hFilter[][fSize] = {
+	{ 1, 1, 1 },
+	{ 0, 0, 0 },
+	{ -1,-1,-1 }
+};
+const int vFilter[][fSize] = {
+	{ 1, 0,-1 },
+	{ 1, 0,-1 },
+	{ 1, 0,-1 }
+};
+
 ////////////////////////////////////////////////////////////////////////
 static BYTE dist(int x, int y) {
 	int d = (int)sqrt(x*x + y*y);
@@ -33,20 +47,6 @@ static BYTE dist(int x, int y) {
 static void processSerial(const fipImage& input, fipImage& output) {
 	assert(input.getWidth() == output.getWidth() && input.getHeight() == output.getHeight() && input.getImageSize() == output.getImageSize());
 	assert(input.getBitsPerPixel() == 32);
-
-	const int fSize = 3;
-	const int fSize2 = fSize/2;
-	const int hFilter[][fSize] = {
-		{ 1, 1, 1 },
-		{ 0, 0, 0 },
-		{ -1,-1,-1 }
-	};
-	const int vFilter[][fSize] = {
-		{ 1, 0,-1 },
-		{ 1, 0,-1 },
-		{ 1, 0,-1 }
-	};
-
 
 	for (unsigned int v = fSize2; v < output.getHeight() - fSize2; v++) {
 		for (unsigned int u = fSize2; u < output.getWidth() - fSize2; u++) {
@@ -72,22 +72,105 @@ static void processSerial(const fipImage& input, fipImage& output) {
 }
 
 ////////////////////////////////////////////////////////////////////////
+// Sequential with minimal calls of getScanLine() instead of using getPixelColor() and setPixelColor().
 static void processSerialOpt(const fipImage& input, fipImage& output) {
-	const int bypp = 4;
-	assert(input.getWidth() == output.getWidth() && input.getHeight() == output.getHeight() && input.getImageSize() == output.getImageSize());
-	assert(input.getBitsPerPixel() == bypp*8);
 
-	// TODO
+	assert(input.getWidth() == output.getWidth() && input.getHeight() == output.getHeight() && input.getImageSize() == output.getImageSize());
+	assert(input.getBitsPerPixel() == bypp * 8);
+
+	// Get number of bytes from one row of pixels (image width + padding = stride)
+	const size_t stride = input.getScanWidth();
+
+	// Get pointer on first scan line
+	BYTE *iRow = input.getScanLine(fSize2) + bypp*fSize2;
+	BYTE *oRow = output.getScanLine(fSize2) + bypp*fSize2;
+
+	// Iterate over rows
+	for (size_t v = fSize2; v < output.getHeight() - fSize2; v++) {
+		BYTE *iCenter = iRow;
+		BYTE *oPos = oRow;
+
+		// and columns of the image
+		for (size_t u = fSize2; u < output.getWidth() - fSize2; u++) {
+			int hC[3] = { 0, 0, 0 };
+			int vC[3] = { 0, 0, 0 };
+
+			// Position in row
+			BYTE *iPos = iCenter - fSize2*stride - bypp*fSize2;
+
+			// Filter iteration
+			for (size_t j = 0; j < fSize; j++) {
+				for (size_t i = 0; i < fSize; i++) {
+					RGBQUAD *iC = reinterpret_cast<RGBQUAD*>(iPos);
+					hC[0] += hFilter[j][i] * iC->rgbBlue;
+					vC[0] += vFilter[j][i] * iC->rgbBlue;
+					hC[1] += hFilter[j][i] * iC->rgbGreen;
+					vC[1] += vFilter[j][i] * iC->rgbGreen;
+					hC[2] += hFilter[j][i] * iC->rgbRed;
+					vC[2] += vFilter[j][i] * iC->rgbRed;
+					iPos += bypp;
+				}
+				iPos += stride - bypp*fSize;
+			}
+
+			//Calculate distance for each color value and assign in output at position
+			RGBQUAD *oC = reinterpret_cast<RGBQUAD*>(oPos);
+			oC->rgbBlue = dist(hC[0], vC[0]);
+			oC->rgbGreen = dist(hC[1], vC[1]);
+			oC->rgbRed = dist(hC[2], vC[2]);
+			oC->rgbReserved = 255;
+			iCenter += bypp;
+			oPos += bypp;
+		}
+		iRow += stride;
+		oRow += stride;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////
 static void processParallel(const fipImage& input, fipImage& output) {
-	const int bypp = 4;
 	assert(input.getWidth() == output.getWidth() && input.getHeight() == output.getHeight() && input.getImageSize() == output.getImageSize());
-	assert(input.getBitsPerPixel() == bypp*8);
+	assert(input.getBitsPerPixel() == bypp * 8);
 
-	// TODO
+	const size_t stride = input.getScanWidth();
+	
+	#pragma omp parallel for default(none)
+	for (int v = fSize2; v < (int)output.getHeight() - fSize2; v++) {
+		BYTE *iCenter = input.getScanLine(v) + bypp*fSize2;
+		BYTE *oPos = output.getScanLine(v) + bypp*fSize2;
+
+		#pragma omp parallel for default(none)
+		for (size_t u = fSize2; u < output.getWidth() - fSize2; u++) {
+			int hC[3] = { 0, 0, 0 };
+			int vC[3] = { 0, 0, 0 };
+
+			BYTE *iPos = iCenter - fSize2*stride - bypp*fSize2;
+			#pragma omp parallel for default(none)
+			for (size_t j = 0; j < fSize; j++) {
+				for (size_t i = 0; i < fSize; i++) {
+					RGBQUAD *iC = reinterpret_cast<RGBQUAD*>(iPos);
+					hC[0] += hFilter[j][i] * iC->rgbBlue;
+					vC[0] += vFilter[j][i] * iC->rgbBlue;
+					hC[1] += hFilter[j][i] * iC->rgbGreen;
+					vC[1] += vFilter[j][i] * iC->rgbGreen;
+					hC[2] += hFilter[j][i] * iC->rgbRed;
+					vC[2] += vFilter[j][i] * iC->rgbRed;
+					iPos += bypp;
+				}
+				iPos += stride - bypp*fSize;
+			}
+			RGBQUAD *oC = reinterpret_cast<RGBQUAD*>(oPos);
+			oC->rgbBlue = dist(hC[0], vC[0]);
+			oC->rgbGreen = dist(hC[1], vC[1]);
+			oC->rgbRed = dist(hC[2], vC[2]);
+			oC->rgbReserved = 255;
+			iCenter += bypp;
+			oPos += bypp;
+		}
+	}
 }
+
+
 
 ////////////////////////////////////////////////////////////////////////
 static bool operator==(const fipImage& im1, const fipImage& im2) {
