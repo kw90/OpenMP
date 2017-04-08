@@ -129,23 +129,34 @@ static void processSerialOpt(const fipImage& input, fipImage& output) {
 
 ////////////////////////////////////////////////////////////////////////
 static void processParallel(const fipImage& input, fipImage& output) {
+	const int bypp = 4;
 	assert(input.getWidth() == output.getWidth() && input.getHeight() == output.getHeight() && input.getImageSize() == output.getImageSize());
 	assert(input.getBitsPerPixel() == bypp * 8);
 
 	const size_t stride = input.getScanWidth();
-	
+	const int fSize = 3;
+	const int fSize2 = fSize / 2;
+	const int hFilter[][fSize] = {
+		{ 1, 1, 1 },
+		{ 0, 0, 0 },
+		{ -1,-1,-1 }
+	};
+	const int vFilter[][fSize] = {
+		{ 1, 0,-1 },
+		{ 1, 0,-1 },
+		{ 1, 0,-1 }
+	};
+
 	#pragma omp parallel for default(none)
 	for (int v = fSize2; v < (int)output.getHeight() - fSize2; v++) {
 		BYTE *iCenter = input.getScanLine(v) + bypp*fSize2;
 		BYTE *oPos = output.getScanLine(v) + bypp*fSize2;
 
-		#pragma omp parallel for default(none)
 		for (size_t u = fSize2; u < output.getWidth() - fSize2; u++) {
 			int hC[3] = { 0, 0, 0 };
 			int vC[3] = { 0, 0, 0 };
 
 			BYTE *iPos = iCenter - fSize2*stride - bypp*fSize2;
-			#pragma omp parallel for default(none)
 			for (size_t j = 0; j < fSize; j++) {
 				for (size_t i = 0; i < fSize; i++) {
 					RGBQUAD *iC = reinterpret_cast<RGBQUAD*>(iPos);
